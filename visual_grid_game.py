@@ -1,6 +1,21 @@
-# visual_grid_game.py
 import random
-import tkinter as tk
+
+# tkinter is only needed for the GUI. Importing it lazily lets the environment
+# and the agents be tested headlessly (e.g. in Google Colab or a CI runner).
+try:
+    import tkinter as tk
+    TK_AVAILABLE = True
+except ImportError:
+    tk = None
+    TK_AVAILABLE = False
+
+# How each action changes an (x, y) coordinate. y increases upwards.
+MOVES = {
+    'Up': (0, 1),
+    'Down': (0, -1),
+    'Left': (-1, 0),
+    'Right': (1, 0),
+}
 
 
 class VisualGridHuntGame:
@@ -39,19 +54,47 @@ class VisualGridHuntGame:
         self.steps = 0
         self.collision = False
 
+        # Step 1.1: the environment now owns the agent's facing direction.
+        # The agent is blind to coordinates, so it cannot track this itself.
+        self.facing = 'Right'
+
+    def _wall_ahead(self) -> bool:
+        """Is the cell directly in front of the agent a wall or the grid edge?"""
+        dx, dy = MOVES.get(self.facing, (0, 0))
+        nx, ny = self.agent_pos[0] + dx, self.agent_pos[1] + dy
+
+        if not (0 <= nx < self.width and 0 <= ny < self.height):
+            return True
+        return (nx, ny) in self.walls
+
     def get_percept(self) -> dict:
+        """Percept for the reflex agents (Practicals 1 & 2) PLUS the world
+        model needed by the goal-based SearchAgent (Practical 3, Step 1.1).
+
+        The two local booleans ('wall_ahead', 'food_here') keep the reflex
+        agents partially observable exactly as before - they cannot tell one
+        corner of the grid from another. The three new keys below instead
+        expose the environment's abstract state space so a planning agent can
+        SIMULATE future states (BFS/DFS/UCS) before ever moving:
+
+            'grid_size': (self.width, self.height)
+            'walls':     list(self.walls)
+            'all_food':  list(self.food_positions)
+        """
         return {
-            'agent_pos': list(self.agent_pos),
-            'opponent_positions': [list(op) for op in self.opponents],
-            'smells_food': tuple(self.agent_pos) in self.food_positions,
-            'hit_wall': tuple(self.agent_pos) in self.walls,
-            'collision': self.collision,
-            'score': self.score,
-            'remaining_food': len(self.food_positions)
+             'wall_ahead': self._wall_ahead(),
+             'food_here': tuple(self.agent_pos) in self.food_positions,
+
+             # Practical 3 - Step 1.1
+             'grid_size': (self.width, self.height),
+             'walls': list(self.walls),
+             'all_food': list(self.food_positions),
         }
 
     def execute_action(self, action: str):
         self.steps += 1
+        if action in MOVES:
+            self.facing = action
         new_pos = list(self.agent_pos)
 
         if action == 'Up':
@@ -95,8 +138,9 @@ class VisualGridHuntGame:
 class GridGameGUI:
     """Tkinter wrapper that dynamically scales cell sizes to keep larger grids on screen."""
 
-    def __init__(self, root, width=10, height=10, num_food=12, num_opponents=2, walls=None):
+    def __init__(self, root, width=10, height=10, num_food=12, num_opponents=2, walls=None, agent=None):
         self.root = root
+        self.agent = agent
         self.root.title("IT3012 - Scalable Multi-Agent Grid Hunt")
 
         self.env = VisualGridHuntGame(width=width, height=height, num_food=num_food, num_opponents=num_opponents,
@@ -165,7 +209,11 @@ class GridGameGUI:
 
         def step():
             if not self.env.is_done():
-                action = random.choice(['Up', 'Down', 'Left', 'Right'])
+                if self.agent is not None:
+                    percept = self.env.get_percept()
+                    action = self.agent.sense_and_act(percept)
+                else:
+                    action = random.choice(['Up', 'Down', 'Left', 'Right'])
                 self.env.execute_action(action)
 
                 self.draw_grid()
@@ -178,9 +226,53 @@ class GridGameGUI:
 
         step()
 
+    def get_neighbors(self, position, grid_size, walls):
+
+     x, y = position
+     width, height = grid_size
+
+     moves = [
+        ("UP", (x, y - 1)),
+        ("DOWN", (x, y + 1)),
+        ("LEFT", (x - 1, y)),
+        ("RIGHT", (x + 1, y))
+     ]
+
+     neighbors = []
+
+     for action, new_position in moves:
+
+         nx, ny = new_position
+
+         # Check map boundary
+         if nx < 0 or nx >= width:
+             continue
+
+         if ny < 0 or ny >= height:
+            continue
+
+        # Check wall
+         if new_position in walls:
+             continue
+
+         neighbors.append((action, new_position))
+
+     return neighbors
+
 
 if __name__ == "__main__":
+    from agent import SearchAgent
+
+    if not TK_AVAILABLE:
+        raise SystemExit("tkinter is not installed - run practical2_demo.py instead.")
+
     root = tk.Tk()
-    # Try a larger grid size like 12x12 with 15 food and 3 opponents!
-    app = GridGameGUI(root, width=12, height=12, num_food=15, num_opponents=0)
+    # Practical 3 - Step 1.3 Observation Task: swap SearchAgent().active_algo
+    # between 'BFS', 'DFS' and 'UCS' (or the class default in agent.py) and
+    # re-run to compare the paths. Swap in ModelBasedAgent()/SimpleReflexAgent()
+    # to see the earlier reflex agents, or pass agent=None for the random walker.
+    search_agent = SearchAgent()
+    search_agent.active_algo = 'BFS'   # try 'DFS' / 'UCS' too
+    app = GridGameGUI(root, width=12, height=12, num_food=15, num_opponents=0,
+                      agent=search_agent)
     root.mainloop()
