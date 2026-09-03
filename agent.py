@@ -3,8 +3,10 @@
 # Practical 1: Simple Reflex Agent
 # Practical 2: Model-Based (Reflex) Agent
 # Practical 3: Problem-Solving / Search Agent (BFS, DFS, UCS)
+# Practical 4: Informed Search Agent (A* + Heuristics)
 
 import random
+import math
 from collections import deque
 import heapq
 import itertools
@@ -222,13 +224,34 @@ class SearchAgent:
     on a grid full of cycles.
     """
 
-    def __init__(self):
+    def __init__(self, algo='AStar', heuristic_type='manhattan'):
         self.plan = []
-        self.active_algo = 'BFS'      # Step 1.3: 'BFS' | 'DFS' | 'UCS'
+        # Practical 3: 'BFS' | 'DFS' | 'UCS'
+        # Practical 4: 'AStar'
+        self.active_algo = algo
+        self.heuristic_type = heuristic_type
         self.position = (0, 0)        # where the agent believes it is (dead reckoning)
         self.nodes_expanded = 0
 
-    # -- Step 1.2a: Breadth-First Search ------------------------------------
+    # -------------------------------------------------------------------
+    # Practical 4 - Step 1.1: Heuristic Functions
+    # -------------------------------------------------------------------
+    def manhattan_distance(self, pos, goal):
+        """Return Manhattan distance: |x1-x2| + |y1-y2|."""
+        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+    def euclidean_distance(self, pos, goal):
+        """Return straight-line Euclidean distance."""
+        return math.sqrt((pos[0] - goal[0]) ** 2 + (pos[1] - goal[1]) ** 2)
+
+    def _heuristic(self, pos, goal, heuristic_type=None):
+        """Select the heuristic requested by Lab 04."""
+        heuristic_type = heuristic_type or self.heuristic_type
+        if str(heuristic_type).lower() == 'euclidean':
+            return self.euclidean_distance(pos, goal)
+        return self.manhattan_distance(pos, goal)
+
+    # -- Practical 3 - Step 1.2a: Breadth-First Search ----------------------
     def bfs_search(self, start_pos, goal_pos, walls, grid_size):
         """
         Breadth-First Search over a rectangular grid.
@@ -418,58 +441,162 @@ class SearchAgent:
 
         return None
 
+    # -------------------------------------------------------------------
+    # Practical 4 - Step 1.2: A* Search
+    # -------------------------------------------------------------------
+    def astar_search(self, start_pos, goal_pos, walls, grid_size,
+                     heuristic_type='manhattan'):
+        """
+        A* Search over a rectangular 4-way movement grid.
+
+        A* prioritizes the smallest:
+            f(n) = g(n) + h(n)
+
+        where:
+            g(n) = path cost from start to current node
+            h(n) = estimated cost from current node to goal
+
+        Returns:
+            list of actions if a path is found,
+            [] if start is already the goal,
+            None if the goal is unreachable.
+        """
+        width, height = grid_size
+        start = tuple(start_pos)
+        goal = tuple(goal_pos)
+        wall_set = {tuple(w) for w in walls}
+
+        self.nodes_expanded = 0
+
+        if start == goal:
+            return []
+        if start in wall_set or goal in wall_set:
+            return None
+
+        # Lab 04 asks for a priority queue ordered by f(n).
+        # The tuple follows the practical sheet:
+        # (f_cost, g_cost, current_pos, path_taken)
+        g_start = 0
+        h_start = self._heuristic(start, goal, heuristic_type)
+        f_start = g_start + h_start
+
+        frontier = [(f_start, g_start, start, [])]
+        reached_states = set()
+
+        while frontier:
+            f_cost, g_cost, current_pos, path_taken = heapq.heappop(frontier)
+
+            if current_pos in reached_states:
+                continue
+
+            self.nodes_expanded += 1
+
+            if current_pos == goal:
+                return path_taken
+
+            reached_states.add(current_pos)
+
+            for action in DIRECTIONS:
+                dx, dy = MOVES[action]
+                nx = current_pos[0] + dx
+                ny = current_pos[1] + dy
+                next_pos = (nx, ny)
+
+                # Valid neighbor = inside grid, not wall, not already reached.
+                if not (0 <= nx < width and 0 <= ny < height):
+                    continue
+                if next_pos in wall_set:
+                    continue
+                if next_pos in reached_states:
+                    continue
+
+                g_new = g_cost + 1
+                h_new = self._heuristic(next_pos, goal, heuristic_type)
+                f_new = g_new + h_new
+
+                heapq.heappush(
+                    frontier,
+                    (f_new, g_new, next_pos, path_taken + [action])
+                )
+
+        return None
+
     # -- helpers for driving the live environment ---------------------------
     def _closest_food(self, start_pos, food_positions):
-        """Rank candidate goals by Manhattan distance so we search towards a
-        sensible pellet rather than an arbitrary one."""
+        """Choose the nearest food item using Manhattan distance."""
         if not food_positions:
             return None
-        sx, sy = start_pos
         return min(
             (tuple(f) for f in food_positions),
-            key=lambda f: abs(f[0] - sx) + abs(f[1] - sy),
+            key=lambda f: self.manhattan_distance(start_pos, f),
         )
 
     def _search(self, start_pos, goal_pos, walls, grid_size):
-        """Dispatch to whichever algorithm self.active_algo names."""
-        strategies = {
-            'BFS': self.bfs_search,
-            'DFS': self.dfs_search,
-            'UCS': self.ucs_search,
-        }
-        strategy = strategies.get(self.active_algo, self.bfs_search)
-        return strategy(start_pos, goal_pos, walls, grid_size)
+        """Dispatch to BFS, DFS, UCS, or A* depending on active_algo."""
+        algo = str(self.active_algo).upper()
 
-    # -- Step 1.3: form a plan, then execute it ------------------------------
+        if algo == 'BFS':
+            return self.bfs_search(start_pos, goal_pos, walls, grid_size)
+        if algo == 'DFS':
+            return self.dfs_search(start_pos, goal_pos, walls, grid_size)
+        if algo == 'UCS':
+            return self.ucs_search(start_pos, goal_pos, walls, grid_size)
+        if algo in ('ASTAR', 'A*'):
+            return self.astar_search(
+                start_pos,
+                goal_pos,
+                walls,
+                grid_size,
+                self.heuristic_type,
+            )
+
+        # Safe fallback for an unknown algorithm name.
+        return self.bfs_search(start_pos, goal_pos, walls, grid_size)
+
+    # -------------------------------------------------------------------
+    # Practical 4 - Step 1.3: Integrate A* into the decision loop
+    # -------------------------------------------------------------------
     def sense_and_act(self, percept: dict) -> str:
         """
-        If there is no queued plan, find the nearest food pellet from
-        percept['all_food'] and run self.active_algo (BFS/DFS/UCS) to build
-        a brand-new plan. Either way, pop and return the plan's next action.
+        Build a plan to the closest remaining food, then execute one action.
+
+        Compatibility note:
+        - Lab 03 code used percept['all_food'].
+        - Lab 04 sheet gives percept['remaining_food'] as the example key.
+        This implementation supports BOTH names.
         """
+        # If the visual environment provides the real agent position, use it.
+        # Otherwise continue using the dead-reckoned position from Lab 03.
+        if 'agent_pos' in percept:
+            self.position = tuple(percept['agent_pos'])
+
         if not self.plan:
             grid_size = percept.get('grid_size')
             walls = percept.get('walls', [])
-            all_food = percept.get('all_food', [])
+            remaining_food = percept.get(
+                'remaining_food',
+                percept.get('all_food', [])
+            )
 
-            goal = self._closest_food(self.position, all_food)
+            goal = self._closest_food(self.position, remaining_food)
 
             if grid_size is None or goal is None:
-                return random.choice(DIRECTIONS)   # no world model / no food yet
+                return 'Stay'
 
             new_plan = self._search(self.position, goal, walls, grid_size)
-            self.plan = new_plan if new_plan else []
+            self.plan = new_plan if new_plan is not None else []
 
         if not self.plan:
-            return random.choice(DIRECTIONS)       # goal unreachable - don't freeze
+            return 'Stay'
 
         action = self.plan.pop(0)
 
-        # The plan was built from a full, accurate world model, so every
-        # planned move is guaranteed to succeed - dead reckoning here is
-        # exact, not an estimate as it was for ModelBasedAgent.
-        dx, dy = MOVES[action]
-        self.position = (self.position[0] + dx, self.position[1] + dy)
+        # If agent_pos is not supplied by the environment, update position
+        # ourselves exactly as in Practical 03.
+        if 'agent_pos' not in percept:
+            dx, dy = MOVES[action]
+            self.position = (self.position[0] + dx, self.position[1] + dy)
+
         return action
 
 
@@ -484,3 +611,18 @@ class GreedyGridAgent:
 
     def sense_and_act(self, percept: dict) -> str:
         return random.choice(self.actions_pool)
+
+# ---------------------------------------------------------------------------
+# Practical 4 - Step 1.1 Testing Checkpoint
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    tester = SearchAgent(algo='AStar', heuristic_type='manhattan')
+    p1 = (0, 0)
+    p2 = (3, 4)
+
+    print("Testing Checkpoint:")
+    print("Manhattan Distance between", p1, "and", p2, ":",
+          tester.manhattan_distance(p1, p2))
+    print("Euclidean Distance between", p1, "and", p2, ":",
+          tester.euclidean_distance(p1, p2))
+
